@@ -107,6 +107,7 @@ class LLaDA(TemplateLM):
         pd_threshold: float = 1.0,
         pd_alpha: float = 0.01,
         pd_beta: float = 0.15,
+        pd_dtype: str = "float64",
         mc_num: int = 1024,
         remasking: str = "low_confidence",
         mask_id: int = 126336,
@@ -134,6 +135,10 @@ class LLaDA(TemplateLM):
         self.pd_threshold = pd_threshold
         self.pd_alpha = pd_alpha
         self.pd_beta = pd_beta
+        # Accumulation dtype for the PD probability statistics. float64 matches
+        # the original implementation; float32 halves their memory footprint,
+        # which matters at large batch sizes (see generate_pd).
+        self.pd_dtype = getattr(torch, pd_dtype)
         self.is_check_greedy = is_check_greedy
         self.is_feature_cache = is_feature_cache
         self.add_bos_token = add_bos_token
@@ -853,6 +858,7 @@ class LLaDA(TemplateLM):
                     use_cache=self.is_feature_cache,
                     cfg_scale=gen_kwargs.get("cfg_scale", 0.0),
                     attention_mask=attn_masks,
+                    pd_dtype=self.pd_dtype,
                 )
                 out = out[:, context_enc.shape[1]:]
 

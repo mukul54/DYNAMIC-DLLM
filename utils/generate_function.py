@@ -12,6 +12,33 @@ def add_gumbel_noise(logits, temperature):
     return logits.exp() / gumbel_noise
 
 
+def extend_attention_mask(attention_mask, total_length):
+    """Pad a prompt-length attention mask out to the full denoising sequence.
+
+    The model is called on ``[prompt | gen_region]``, but the tokenizer only
+    produces a mask for the prompt. Handing that short mask to the model builds
+    an attention bias whose key dimension is ``prompt_length`` while q/k are
+    ``prompt_length + gen_length``, which fails to broadcast inside
+    scaled_dot_product_attention. Generated positions are always attendable, so
+    the mask is extended with ones.
+    """
+    if attention_mask is None:
+        return None
+    batch_size, mask_length = attention_mask.shape
+    if mask_length == total_length:
+        return attention_mask
+    if mask_length > total_length:
+        raise ValueError(
+            f"attention_mask is longer ({mask_length}) than the sequence ({total_length})"
+        )
+    pad = torch.ones(
+        (batch_size, total_length - mask_length),
+        dtype=attention_mask.dtype,
+        device=attention_mask.device,
+    )
+    return torch.cat([attention_mask, pad], dim=1)
+
+
 def get_num_transfer_tokens(mask_index, steps):
     mask_num = mask_index.sum(dim=1, keepdim=True)
     base = mask_num // steps
@@ -52,6 +79,7 @@ def generate(
             device=model.device,
         )
         x[:, :prompt_length] = input_ids
+        attention_mask = extend_attention_mask(attention_mask, x.shape[1])
 
         prompt_index = x != mask_id
 
@@ -128,9 +156,15 @@ def generate(
                     logits = model(x, attention_mask=attention_mask).logits[
                         :, prompt_length:
                     ]
-                logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
-
-                x0 = torch.argmax(logits_with_noise, dim=-1)
+                if temperature == 0:
+                    # add_gumbel_noise returns logits.exp(); exp is monotonic so
+                    # the argmax is identical without the full-vocab copy.
+                    x0 = torch.argmax(logits, dim=-1)
+                else:
+                    logits_with_noise = add_gumbel_noise(
+                        logits, temperature=temperature
+                    )
+                    x0 = torch.argmax(logits_with_noise, dim=-1)
 
                 if remasking == "low_confidence":
                     p = F.softmax(logits, dim=-1)
@@ -170,8 +204,74 @@ def generate(
 # Prediction Dynamics (PD) — adaptive threshold generation
 # ===========================================================================
 
+# The PD statistics are computed over the full vocabulary, so a whole
+# (B, L, V) tensor exists per denoising step. For LLaDA that is
+# B * L * 126464 elements, which at batch 16 / gen_length 512 is 7.7 GiB in
+# float64 -- and the intermediates used to be several multiples of that. The
+# helpers below chunk along the sequence dimension so peak memory stays close
+# to the one tensor that genuinely has to exist, without changing any result.
+PD_CHUNK = 64
+
+
+def _softmax_chunked(logits, dtype, chunk=PD_CHUNK):
+    """Softmax over the vocab, writing into one preallocated output tensor.
+
+    ``F.softmax(logits.to(dtype), dim=-1)`` transiently holds both the upcast
+    copy and the result; this holds one full tensor plus a small chunk.
+    """
+    out = torch.empty(logits.shape, dtype=dtype, device=logits.device)
+    for start in range(0, logits.shape[1], chunk):
+        stop = start + chunk
+        out[:, start:stop] = F.softmax(logits[:, start:stop].to(dtype), dim=-1)
+    return out
+
+
+def _second_largest(probs, chunk=PD_CHUNK):
+    """Second-largest probability per position.
+
+    Equivalent to ``torch.sort(probs, dim=-1).values[:, :, -2]`` but via topk:
+    a full sort also allocates an int64 index tensor the size of the input
+    (another 7.7 GiB at batch 16), and only the top two values are ever read.
+    """
+    out = torch.empty(probs.shape[:2], dtype=probs.dtype, device=probs.device)
+    for start in range(0, probs.shape[1], chunk):
+        stop = start + chunk
+        out[:, start:stop] = torch.topk(probs[:, start:stop], 2, dim=-1).values[:, :, 1]
+    return out
+
+
+def _cosine_similarity_chunked(a, b, chunk=PD_CHUNK):
+    """Cosine similarity along the vocab dimension, chunked over positions."""
+    out = torch.empty(a.shape[:2], dtype=a.dtype, device=a.device)
+    for start in range(0, a.shape[1], chunk):
+        stop = start + chunk
+        out[:, start:stop] = F.cosine_similarity(
+            a[:, start:stop], b[:, start:stop], dim=-1
+        )
+    return out
+
+
+def _gather_softmax_prob(logits, index, dtype, chunk=PD_CHUNK):
+    """Softmax probability of ``index``, without materialising the softmax.
+
+    ``softmax(l)[i] == exp(l[i] - logsumexp(l))``, so only a (B, L) result and
+    one chunk of upcast logits need to exist -- instead of a full (B, L, V)
+    probability tensor that is then thrown away after a single gather.
+    """
+    out = torch.empty(logits.shape[:2], dtype=dtype, device=logits.device)
+    for start in range(0, logits.shape[1], chunk):
+        stop = start + chunk
+        chunk_logits = logits[:, start:stop].to(dtype)
+        selected = chunk_logits.gather(
+            -1, index[:, start:stop].unsqueeze(-1)
+        ).squeeze(-1)
+        out[:, start:stop] = (selected - torch.logsumexp(chunk_logits, dim=-1)).exp()
+    return out
+
+
 def update_pd_threshold(logits, prev_probs, current_threshold, mask_index,
-                         pd_mode, alpha, beta, global_step_counter):
+                         pd_mode, alpha, beta, global_step_counter,
+                         dtype=torch.float64):
     """
     Update PD (Prediction Dynamics) threshold based on model confidence.
 
@@ -184,6 +284,9 @@ def update_pd_threshold(logits, prev_probs, current_threshold, mask_index,
         alpha: Weight for peak-confidence term.
         beta: Weight for distribution-shift term.
         global_step_counter: 1-based step count.
+        dtype: accumulation dtype for the probability tensors. float64 matches
+            the original implementation; float32 halves the memory these
+            statistics need.
 
     Returns:
         (updated_threshold, current_probs)
@@ -191,14 +294,13 @@ def update_pd_threshold(logits, prev_probs, current_threshold, mask_index,
     if pd_mode == 0:
         return current_threshold, None
 
-    probabilities = F.softmax(logits.to(torch.float64), dim=-1)
+    probabilities = _softmax_chunked(logits, dtype)
 
     if global_step_counter > 1 and prev_probs is not None:
-        sorted_values, _ = torch.sort(probabilities, dim=-1)
-        peak_confidence = 1 - sorted_values[:, :, -2]
+        peak_confidence = 1 - _second_largest(probabilities)
 
-        distribution_similarity = 1 - F.cosine_similarity(
-            probabilities, prev_probs, dim=-1
+        distribution_similarity = 1 - _cosine_similarity_chunked(
+            probabilities, prev_probs
         )
 
         if pd_mode == 1:
@@ -213,7 +315,7 @@ def update_pd_threshold(logits, prev_probs, current_threshold, mask_index,
         if pd_mode == 2:
             current_threshold = torch.full(
                 size=logits.shape[:2], fill_value=float(current_threshold),
-                device=logits.device, dtype=torch.float64
+                device=logits.device, dtype=dtype
             )
         return current_threshold, probabilities
 
@@ -226,6 +328,7 @@ def get_transfer_index_pd(
     x: torch.Tensor,
     threshold,
     pd_mode: int,
+    dtype=torch.float64,
 ):
     """
     PD-aware token selection. Computes confidence the same way as get_transfer_index,
@@ -233,18 +336,28 @@ def get_transfer_index_pd(
 
     At least one token (max confidence) is always transferred per batch row.
 
+    Args:
+        logits / mask_index / x: the generation region only, shape (B, gen_length).
+            Prompt positions are never masked, so restricting to the generation
+            region is equivalent and avoids upcasting prompt logits that are
+            then discarded.
+
     Returns:
-        x0: (B, L) long — proposed tokens
-        transfer_index: (B, L) bool — which positions to update this step
+        x0: (B, gen_length) long — proposed tokens
+        transfer_index: (B, gen_length) bool — which positions to update this step
     """
-    logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
-    x0 = torch.argmax(logits_with_noise, dim=-1)
+    if temperature == 0:
+        # add_gumbel_noise returns logits.exp() here, and exp is monotonic, so
+        # the argmax is unchanged -- skip materialising a full (B, L, V) copy.
+        x0 = torch.argmax(logits, dim=-1)
+    else:
+        logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+        x0 = torch.argmax(logits_with_noise, dim=-1)
 
     if remasking == "low_confidence":
-        p = F.softmax(logits.to(torch.float64), dim=-1)
-        x0_p = torch.gather(p, dim=-1, index=x0.unsqueeze(-1)).squeeze(-1)
+        x0_p = _gather_softmax_prob(logits, x0, dtype)
     elif remasking == "random":
-        x0_p = torch.rand(x0.shape, device=x0.device, dtype=torch.float64)
+        x0_p = torch.rand(x0.shape, device=x0.device, dtype=dtype)
     else:
         raise NotImplementedError(remasking)
 
@@ -266,7 +379,8 @@ def get_transfer_index_pd(
 def generate_pd(model, prompt, steps=128, gen_length=128, block_length=128, temperature=0.,
                 remasking='low_confidence', mask_id=126336, threshold=None,
                 pd_mode=1, pd_threshold=1.0, alpha=0.01, beta=0.15,
-                use_cache=False, cfg_scale=0.0, attention_mask=None):
+                use_cache=False, cfg_scale=0.0, attention_mask=None,
+                pd_dtype=torch.float64):
     """
     Block-wise generation with Prediction Dynamics (PD) adaptive threshold.
 
@@ -291,10 +405,15 @@ def generate_pd(model, prompt, steps=128, gen_length=128, block_length=128, temp
         beta: PD update weight for distribution shift (default 0.15).
         use_cache: Enable dynamic dllm (default False).
         cfg_scale: Unsupervised classifier-free guidance scale (default 0.0).
-        attention_mask: Attention mask for the model forward pass.
+        attention_mask: Attention mask for the prompt; extended internally to
+            cover the generation region.
+        pd_dtype: accumulation dtype for the PD probability statistics.
+            torch.float64 reproduces the original implementation; torch.float32
+            halves the memory they need at a cost of ~1e-7 relative error.
     """
     x = torch.full((prompt.shape[0], prompt.shape[1] + gen_length), mask_id, dtype=torch.long).to(model.device)
     x[:, :prompt.shape[1]] = prompt.clone()
+    attention_mask = extend_attention_mask(attention_mask, x.shape[1])
 
     assert gen_length % block_length == 0
     num_blocks = gen_length // block_length
@@ -341,34 +460,31 @@ def generate_pd(model, prompt, steps=128, gen_length=128, block_length=128, temp
             updated_threshold, cur_probs_full = update_pd_threshold(
                 gen_logits, prev_probs, current_pd_threshold,
                 gen_mask, pd_mode=pd_mode, alpha=alpha, beta=beta,
-                global_step_counter=global_step_counter,
+                global_step_counter=global_step_counter, dtype=pd_dtype,
             )
             current_pd_threshold = updated_threshold
             if cur_probs_full is not None:
                 prev_probs = cur_probs_full
 
             # --- Build threshold for get_transfer_index_pd ---
+            # Selection runs on the generation region only. pd_mode 2 already
+            # produces a (B, gen_length) threshold, so no full-sequence
+            # threshold tensor (previously padded with inf over the prompt)
+            # needs to be built.
             if pd_mode == 1:
                 use_threshold = float(current_pd_threshold) if not isinstance(current_pd_threshold, (float, int)) else current_pd_threshold
-            elif pd_mode == 2:
-                full_threshold = torch.full(
-                    (prompt.shape[0], prompt_len + gen_length),
-                    float('inf'), device=current_pd_threshold.device, dtype=current_pd_threshold.dtype
-                )
-                full_threshold[:, prompt_len:] = current_pd_threshold
-                use_threshold = full_threshold
             else:
                 use_threshold = current_pd_threshold
 
             x0, transfer_index = get_transfer_index_pd(
-                logits, temperature, remasking, mask_index, x,
-                threshold=use_threshold, pd_mode=pd_mode,
+                gen_logits, temperature, remasking, gen_mask, x[:, prompt_len:],
+                threshold=use_threshold, pd_mode=pd_mode, dtype=pd_dtype,
             )
-            x[transfer_index] = x0[transfer_index]
+            x[:, prompt_len:][transfer_index] = x0[transfer_index]
 
             # --- Update sliding window center ---
             if use_cache:
-                selected_positions = torch.where(transfer_index.any(dim=0))[0]
+                selected_positions = torch.where(transfer_index.any(dim=0))[0] + prompt_len
                 if selected_positions.numel() > 0:
                     feature_cache.set_cur_prompt(selected_positions)
 

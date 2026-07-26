@@ -101,6 +101,22 @@ environment, e.g. `BATCH_SIZE=1 BLOCK_LENGTH=32 bash scripts/run_LLaDA_gsm8k_512
 Throughput is strongly batch-size dependent, so compare only runs that used the
 same batch size.
 
+#### Memory at large batch sizes
+
+Adaptive parallel decoding keeps two `(batch, gen_length, vocab)` probability
+tensors alive to measure the step-to-step distribution shift. With LLaDA's
+126k vocabulary that is the dominant allocation:
+
+| batch | `gen_length` | float64 | float32 |
+| --- | --- | --- | --- |
+| 1 | 512 | 1.0 GiB | 0.5 GiB |
+| 8 | 512 | 7.7 GiB | 3.9 GiB |
+| 16 | 512 | 15.4 GiB | 7.7 GiB |
+
+If a run OOMs, lower `BATCH_SIZE` or set `PD_DTYPE=float32` (≈1e-7 relative
+error on the threshold comparisons; `float64` is the default and reproduces the
+original implementation exactly).
+
 ## Project Structure
 
 ```

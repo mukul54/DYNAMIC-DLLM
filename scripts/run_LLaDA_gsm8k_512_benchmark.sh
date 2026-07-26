@@ -50,6 +50,10 @@ PD_MODE="${PD_MODE:-2}"              # 2 = per-token adaptive threshold
 PD_THRESHOLD="${PD_THRESHOLD:-0.9}"
 PD_ALPHA="${PD_ALPHA:-0.01}"
 PD_BETA="${PD_BETA:-0.15}"
+# The PD statistics hold two (batch, gen_length, vocab) probability tensors.
+# At batch 16 / gen_length 512 that is 2 x 7.7 GiB in float64; pd_dtype=float32
+# halves it if you are close to the memory limit.
+PD_DTYPE="${PD_DTYPE:-float64}"
 
 # Use the pre-populated local HF cache only if it actually exists, otherwise
 # fall back to the default cache and let HF download. Forcing offline mode
@@ -92,7 +96,7 @@ COMMON_ARGS=(
 )
 
 CACHE_ARGS="is_feature_cache=True,window_size=${WINDOW_SIZE},layer_budget=${LAYER_BUDGET},select_from=${SELECT_FROM},prompt_interval_steps=${PROMPT_INTERVAL},gen_interval_steps=${GEN_INTERVAL}"
-APD_ARGS="generate_mode=pd,pd_mode=${PD_MODE},pd_threshold=${PD_THRESHOLD},pd_alpha=${PD_ALPHA},pd_beta=${PD_BETA}"
+APD_ARGS="generate_mode=pd,pd_mode=${PD_MODE},pd_threshold=${PD_THRESHOLD},pd_alpha=${PD_ALPHA},pd_beta=${PD_BETA},pd_dtype=${PD_DTYPE}"
 
 # run <name> <extra model_args>
 run () {
