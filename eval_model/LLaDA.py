@@ -839,6 +839,10 @@ class LLaDA(TemplateLM):
                     steps=gen_kwargs.get("steps"),
                     gen_length=gen_kwargs.get("gen_length"),
                     block_length=gen_kwargs.get("block_length"),
+                    # Was never forwarded, so --gen_kwargs temperature=... was
+                    # silently ignored on this path while generate_pd honoured
+                    # it. Both are 0.0 under the standard greedy protocol.
+                    temperature=gen_kwargs.get("temperature", 0.),
                     cfg_scale=gen_kwargs.get("cfg_scale"),
                     remasking=gen_kwargs.get("remasking",None) if gen_kwargs.get("remasking",None) else "low_confidence"
                 )
