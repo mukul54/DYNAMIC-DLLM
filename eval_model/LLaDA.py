@@ -103,10 +103,15 @@ class LLaDA(TemplateLM):
         layer_budget: int = 0,
         select_from: str = "x",
         generate_mode: str = "default",
-        pd_mode: int = 0,
-        pd_threshold: float = 1.0,
-        pd_alpha: float = 0.01,
-        pd_beta: float = 0.15,
+        # Adaptive Parallel Decoding defaults, per the paper: Eq. 11 adapts a
+        # per-token threshold (mode 2), Fig. 6c initialises tau^T to 0.9, and
+        # alpha/beta are 0.001/0.0008. Table 7 shows these are sensitive to
+        # order-of-magnitude scaling: 0.01/0.008 drops GSM8K accuracy from
+        # 78.01 to 69.75, and 0.1/0.08 to 59.76.
+        pd_mode: int = 2,
+        pd_threshold: float = 0.9,
+        pd_alpha: float = 0.001,
+        pd_beta: float = 0.0008,
         pd_dtype: str = "float64",
         mc_num: int = 1024,
         remasking: str = "low_confidence",

@@ -38,18 +38,23 @@ NUM_FEWSHOT="${NUM_FEWSHOT:-5}"      # GSM8K is reported 5-shot
 OUT_ROOT="${OUT_ROOT:-./gsm8k512_log}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
-# Dynamic-dLLM cache (DCU) hyper-parameters, as in the README example.
-WINDOW_SIZE="${WINDOW_SIZE:-32}"
-LAYER_BUDGET="${LAYER_BUDGET:-32}"
+# Dynamic-dLLM cache (DCU) hyper-parameters.
+# The paper defaults B_layer = B_window = 32 at gen_len 256, and gives the
+# auto-tuning rule B_layer = B_window = gen_len / 8 for other lengths, so
+# gen_length 512 wants 64 rather than the README example's 32.
+WINDOW_SIZE="${WINDOW_SIZE:-$((GEN_LENGTH / 8))}"
+LAYER_BUDGET="${LAYER_BUDGET:-$((GEN_LENGTH / 8))}"
 SELECT_FROM="${SELECT_FROM:-v}"
 PROMPT_INTERVAL="${PROMPT_INTERVAL:-5000}"
 GEN_INTERVAL="${GEN_INTERVAL:-5000}"
 
-# Adaptive Parallel Decoding (APD) hyper-parameters.
-PD_MODE="${PD_MODE:-2}"              # 2 = per-token adaptive threshold
-PD_THRESHOLD="${PD_THRESHOLD:-0.9}"
-PD_ALPHA="${PD_ALPHA:-0.01}"
-PD_BETA="${PD_BETA:-0.15}"
+# Adaptive Parallel Decoding (APD) hyper-parameters, from the paper.
+# alpha/beta must stay in the 1e-3 range: Table 7 measures 78.01 at
+# 0.001/0.0008, 69.75 at 0.01/0.008 and 59.76 at 0.1/0.08 on GSM8K.
+PD_MODE="${PD_MODE:-2}"              # Eq. 11 adapts a per-token threshold
+PD_THRESHOLD="${PD_THRESHOLD:-0.9}"  # initial tau^T, Fig. 6c
+PD_ALPHA="${PD_ALPHA:-0.001}"        # Table 7
+PD_BETA="${PD_BETA:-0.0008}"         # Table 7
 # The PD statistics hold two (batch, gen_length, vocab) probability tensors.
 # At batch 16 / gen_length 512 that is 2 x 7.7 GiB in float64; pd_dtype=float32
 # halves it if you are close to the memory limit.

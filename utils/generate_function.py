@@ -378,7 +378,7 @@ def get_transfer_index_pd(
 @torch.no_grad()
 def generate_pd(model, prompt, steps=128, gen_length=128, block_length=128, temperature=0.,
                 remasking='low_confidence', mask_id=126336, threshold=None,
-                pd_mode=1, pd_threshold=1.0, alpha=0.01, beta=0.15,
+                pd_mode=2, pd_threshold=0.9, alpha=0.001, beta=0.0008,
                 use_cache=False, cfg_scale=0.0, attention_mask=None,
                 pd_dtype=torch.float64):
     """
@@ -400,9 +400,12 @@ def generate_pd(model, prompt, steps=128, gen_length=128, block_length=128, temp
         mask_id: The token id of [MASK] (default 126336).
         threshold: Fixed threshold for non-PD fallback (ignored when pd_mode > 0).
         pd_mode: 0=disabled, 1=global scalar threshold, 2=per-token threshold.
-        pd_threshold: Initial threshold value (default 1.0).
-        alpha: PD update weight for peak confidence (default 0.01).
-        beta: PD update weight for distribution shift (default 0.15).
+            The paper's Eq. 11 adapts a threshold per token, i.e. mode 2.
+        pd_threshold: Initial threshold tau^T (paper Fig. 6c uses 0.9).
+        alpha: PD update weight for peak confidence. The paper uses 0.001;
+            it is sensitive to order-of-magnitude scaling (Table 7: alpha/beta
+            of 0.01/0.008 drops GSM8K from 78.01 to 69.75, 0.1/0.08 to 59.76).
+        beta: PD update weight for distribution shift. The paper uses 0.0008.
         use_cache: Enable dynamic dllm (default False).
         cfg_scale: Unsupervised classifier-free guidance scale (default 0.0).
         attention_mask: Attention mask for the prompt; extended internally to

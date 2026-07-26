@@ -45,6 +45,29 @@ Cache parameters:
 - `layer_budget` — per-layer token update budget (default 32)
 - `select_from` — feature source for similarity computation: `"v"`
 
+### Hyper-parameters from the paper
+
+`window_size` and `layer_budget` default to 32, which is the paper's value at
+generation length 256. For other lengths the paper gives an auto-tuning rule,
+`B_layer = B_window = gen_length / 8` — so generation length 512 wants **64**.
+
+Adaptive Parallel Decoding uses `pd_mode=2` (Eq. 11 adapts a threshold per
+token), initial threshold `pd_threshold=0.9` (Fig. 6c), and
+`pd_alpha=0.001` / `pd_beta=0.0008` (Table 7).
+
+**`pd_alpha` and `pd_beta` must stay in the 1e-3 range.** They control how fast
+the per-token threshold relaxes, and the paper's Table 7 measures the cost of
+scaling them on GSM8K at generation length 256:
+
+| `pd_alpha` | `pd_beta` | Accuracy | Inference steps |
+| --- | --- | --- | --- |
+| 0.001 | 0.0008 | 78.01 | 95 |
+| 0.01 | 0.008 | 69.75 | 54 |
+| 0.1 | 0.08 | 59.76 | 16 |
+
+Larger values commit more tokens per step and lose accuracy fast. Small
+variations *within* the 1e-3 range are safe (0.0005–0.0017 all score ~78.8).
+
 ### 4. Evaluation
 
 ```bash

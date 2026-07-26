@@ -28,25 +28,26 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 # Cache settings. "slow" = README/eval setting (partial updates only, no full
 # refresh); "demo" = demo.py setting (periodic full refresh every 7 steps).
-CACHE_SLOW="is_feature_cache=True,window_size=32,layer_budget=32,select_from=v,prompt_interval_steps=5000,gen_interval_steps=5000"
-CACHE_DEMO="is_feature_cache=True,window_size=32,layer_budget=32,select_from=v,prompt_interval_steps=100,gen_interval_steps=7"
+CACHE_SLOW="is_feature_cache=True,window_size=64,layer_budget=64,select_from=v,prompt_interval_steps=5000,gen_interval_steps=5000"
+CACHE_DEMO="is_feature_cache=True,window_size=64,layer_budget=64,select_from=v,prompt_interval_steps=100,gen_interval_steps=7"
 NO_CACHE="is_feature_cache=False"
+
+# Paper values: Eq. 11 / Fig. 6c / Table 7.
+APD_PAPER="generate_mode=pd,pd_mode=2,pd_threshold=0.9,pd_alpha=0.001,pd_beta=0.0008"
+# What the repo's stale defaults produce, kept as the negative control.
+APD_REPO="generate_mode=pd,pd_mode=2,pd_threshold=0.9,pd_alpha=0.01,pd_beta=0.15"
 
 # name | gen_length | block_length | model_args | what it isolates
 RUNGS=(
-  # The only PD configuration the repo actually ships end-to-end: demo.py's
-  # settings verbatim (pd_mode=0, threshold 0.9, cache refresh every 7 steps,
-  # block 8, gen 256). If this does not score well, the problem is upstream of
-  # any knob I picked.
-  "d0_demo_exact_b8_g256|256|8|${CACHE_DEMO},generate_mode=pd,pd_mode=0,pd_threshold=0.9|demo.py config verbatim (reference)"
-  "d1_apd2_nocache_b64_g512|512|64|${NO_CACHE},generate_mode=pd,pd_mode=2,pd_threshold=0.9|adaptive per-token threshold, no cache"
-  "d2_apd0_nocache_b64_g512|512|64|${NO_CACHE},generate_mode=pd,pd_mode=0,pd_threshold=0.9|fixed threshold 0.9, no cache"
-  "d3_apd1_nocache_b64_g512|512|64|${NO_CACHE},generate_mode=pd,pd_mode=1,pd_threshold=0.9|adaptive global threshold, no cache"
-  "d4_dcu_apd2_b64_g512|512|64|${CACHE_SLOW},generate_mode=pd,pd_mode=2,pd_threshold=0.9|the failing config (cache + per-token)"
-  "d5_dcu_apd2_demoint_b64_g512|512|64|${CACHE_DEMO},generate_mode=pd,pd_mode=2,pd_threshold=0.9|same but demo.py cache intervals"
-  "d6_apd2_nocache_b8_g512|512|8|${NO_CACHE},generate_mode=pd,pd_mode=2,pd_threshold=0.9|block_length 8 instead of 64"
-  "d7_nocache_greedy_b8_g256|256|8|${NO_CACHE},generate_mode=default|repo's own validated setting (ceiling)"
-  "d8_nocache_greedy_b64_g512|512|64|${NO_CACHE},generate_mode=default|greedy at the benchmark's length/block"
+  # d1 is the headline check: paper alpha/beta at the benchmark's settings.
+  "d1_paper_dcu_apd_b64_g512|512|64|${CACHE_SLOW},${APD_PAPER}|paper alpha/beta, cache + APD (the config to report)"
+  "d2_paper_apd_nocache_b64_g512|512|64|${NO_CACHE},${APD_PAPER}|paper alpha/beta, APD only"
+  "d3_stale_ab_dcu_apd_b64_g512|512|64|${CACHE_SLOW},${APD_REPO}|repo's stale alpha/beta (negative control)"
+  "d4_paper_dcu_apd_b32_g512|512|32|${CACHE_SLOW},${APD_PAPER}|block_length 32 instead of 64"
+  "d5_paper_dcu_apd_b8_g512|512|8|${CACHE_SLOW},${APD_PAPER}|block_length 8 (repo's setting)"
+  "d6_paper_dcu_apd_demoint_b64_g512|512|64|${CACHE_DEMO},${APD_PAPER}|demo.py cache refresh intervals"
+  "d7_nocache_greedy_b8_g256|256|8|${NO_CACHE},generate_mode=default|no-cache greedy at gen 256 (ceiling)"
+  "d8_nocache_greedy_b64_g512|512|64|${NO_CACHE},generate_mode=default|no-cache greedy at the benchmark's length"
   "d9_dcu_greedy_b64_g512|512|64|${CACHE_SLOW},generate_mode=default|greedy + cache (isolates DCU alone)"
 )
 

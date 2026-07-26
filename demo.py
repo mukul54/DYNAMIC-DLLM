@@ -14,10 +14,10 @@ from utils import generate, generate_pd
 # --- generation mode: "default" or "pd" ---
 generate_mode = "pd"  # "default" (fixed schedule) or "pd" (Prediction Dynamics adaptive threshold)
 # --- pd mode params ---
-pd_mode = 0          # 1 = global scalar threshold, 2 = per-token threshold
-pd_threshold = 0.9   # initial threshold
-pd_alpha = 0.01      # peak-confidence weight
-pd_beta = 0.15       # distribution-shift weight
+pd_mode = 2          # 1 = global scalar threshold, 2 = per-token threshold (paper Eq. 11)
+pd_threshold = 0.9   # initial threshold tau^T (paper Fig. 6c)
+pd_alpha = 0.001     # peak-confidence weight (paper Table 7)
+pd_beta = 0.0008     # distribution-shift weight (paper Table 7)
 # --- cache params ---
 prompt_interval_steps = 100
 gen_interval_steps = 7
