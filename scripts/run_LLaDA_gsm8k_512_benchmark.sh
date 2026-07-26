@@ -27,7 +27,10 @@ cd "${REPO_DIR}"
 # ---------------------------------------------------------------------------
 MODEL_PATH="${MODEL_PATH:-/data1/wutianyi/models/LLaDA-1.5}"
 # A stray space in a HF repo id turns into a confusing "repo not found".
-MODEL_PATH="$(echo -n "${MODEL_PATH}" | tr -d '[:space:]')"
+# Also drop U+00A0, which copy-paste introduces and [:space:] does not match.
+MODEL_PATH="$(printf '%s' "${MODEL_PATH}" \
+  | LC_ALL=C tr -d '[:space:][:cntrl:]' \
+  | sed $'s/\xc2\xa0//g')"
 GEN_LENGTH="${GEN_LENGTH:-512}"
 BLOCK_LENGTH="${BLOCK_LENGTH:-64}"   # beta = 64 in the Flash-dLLM paper
 BATCH_SIZE="${BATCH_SIZE:-16}"       # Table 5: batch 16 for LLaDA-1.5 GSM8K
@@ -52,9 +55,12 @@ PD_BETA="${PD_BETA:-0.15}"
 # fall back to the default cache and let HF download. Forcing offline mode
 # against a missing cache fails with an unhelpful "couldn't find" error.
 # Override explicitly with USE_LOCAL_DATA_ENV=1 / 0.
+# Note the directory must be non-empty: data/env.sh does `mkdir -p` on it, so
+# merely sourcing that file once creates an empty tree that would otherwise
+# look like a populated cache and wrongly flip us to offline mode.
 LLADA_DATA_ROOT="${LLADA_DATA_ROOT:-/data1/wutianyi/data/llada}"
 if [[ -z "${USE_LOCAL_DATA_ENV:-}" ]]; then
-  if [[ -d "${LLADA_DATA_ROOT}/hf_datasets" ]]; then
+  if [[ -n "$(ls -A "${LLADA_DATA_ROOT}/hf_datasets" 2>/dev/null)" ]]; then
     USE_LOCAL_DATA_ENV=1
   else
     USE_LOCAL_DATA_ENV=0
@@ -104,7 +110,7 @@ run () {
   mkdir -p "${out_dir}"
   DLLM_RUN_NAME="${name}" \
   DLLM_SPEED_LOG="${out_dir}/speed.json" \
-  python evaluation_script.py -m lm_eval \
+  python evaluation_script.py \
     "${COMMON_ARGS[@]}" \
     --output_path "${out_dir}" \
     --model_args "pretrained=${MODEL_PATH},${extra},speed_log=${out_dir}/speed.json,run_name=${name}"

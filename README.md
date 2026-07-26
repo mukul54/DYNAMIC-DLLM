@@ -48,7 +48,7 @@ Cache parameters:
 ### 4. Evaluation
 
 ```bash
-python evaluation_script.py -m lm_eval \
+python evaluation_script.py \
   --model LLaDA \
   --model_args "pretrained=/path/to/LLaDA-8B-Instruct,is_feature_cache=True,window_size=32,layer_budget=32,select_from=v,prompt_interval_steps=5000,gen_interval_steps=5000,generate_mode=default" \
   --include_path ./lm_eval_tasks \

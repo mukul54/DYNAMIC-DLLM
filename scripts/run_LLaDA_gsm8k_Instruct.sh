@@ -14,7 +14,7 @@ COMMON_ARGS="--model LLaDA --include_path ./lm_eval_tasks --tasks gsm8k_local --
 export CUDA_VISIBLE_DEVICES=6
 
 echo "=== default generate, window_budget cache (select_from=v) ==="
-python evaluation_script.py -m lm_eval \
+python evaluation_script.py \
   ${COMMON_ARGS} \
   --batch_size 1 \
   --output_path ./gsm8k_log/default_window_budget_v \
