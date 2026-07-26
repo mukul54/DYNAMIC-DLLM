@@ -63,6 +63,44 @@ python evaluation_script.py -m lm_eval \
 
 See `scripts/run_LLaDA_gsm8k_Instruct.sh` for a complete example.
 
+### 5. Benchmarking: accuracy, throughput, tokens/step
+
+`scripts/run_LLaDA_gsm8k_512_benchmark.sh` runs GSM8K at generation length 512
+and reports all three metrics for four configurations (no-cache greedy baseline,
+DCU only, APD only, and full Dynamic-dLLM).
+
+```bash
+MODEL_PATH=/path/to/LLaDA-1.5 bash scripts/run_LLaDA_gsm8k_512_benchmark.sh
+```
+
+Every run writes a `speed.json` next to its lm-eval results. Collect them into a
+single table with:
+
+```bash
+python metrics/summarize_runs.py ./gsm8k512_log
+```
+
+```
+run                     acc %      tok/s   speedup  tok/step      NFE     time s
+--------------------------------------------------------------------------------
+nocache_greedy          81.35        2.6      1.0x      1.00    512.0     9999.0
+dcu_apd                 81.20      117.2     45.1x      6.80     75.3      221.0
+```
+
+Metric definitions:
+
+| Metric | Definition |
+| --- | --- |
+| **Accuracy** | lm-eval `exact_match` under the `flexible-extract` filter, 5-shot |
+| **Throughput** | total generated tokens ÷ total generation wall-time, aggregated over the benchmark. Only `generate()` is timed (tokenization, filtering and scoring are excluded), with `torch.cuda.synchronize()` on both sides. Tokens are counted up to the first `<eos>` of each sequence; `throughput_tok_s_full` in `speed.json` counts every filled position instead. |
+| **Tokens/step** | `gen_length / NFE`, where NFE is the number of denoising steps (model forward passes). Fixed-schedule greedy decoding is exactly `1.00`; parallel decoding is higher. |
+
+Defaults follow the standard LLaDA-1.5 GSM8K-512 protocol: 5-shot, `gen_length=512`,
+`block_length=64`, `batch_size=16`, single A100 80GB. Override any of them from the
+environment, e.g. `BATCH_SIZE=1 BLOCK_LENGTH=32 bash scripts/run_LLaDA_gsm8k_512_benchmark.sh`.
+Throughput is strongly batch-size dependent, so compare only runs that used the
+same batch size.
+
 ## Project Structure
 
 ```
@@ -83,6 +121,8 @@ dynamic_dllm/
 ├── data/                           # Dataset download/verification scripts
 ├── lm_eval_tasks/                  # Custom lm-eval task definitions
 ├── metrics/                        # Accuracy and pass@1 computation
+│   ├── speed.py                    # Throughput / tokens-per-step accounting
+│   └── summarize_runs.py           # Collect accuracy + speed into one table
 ├── scripts/                        # Evaluation run scripts
 └── assets/                         # Images for documentation
 ```

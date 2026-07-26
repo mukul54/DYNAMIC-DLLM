@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+# Evaluation outputs
+gsm8k_log/
+gsm8k512_log/

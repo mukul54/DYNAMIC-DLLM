@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple, Union,Type,TypeVar
@@ -44,6 +45,7 @@ eval_logger = logging.getLogger(__name__)
 from utils import  generate, generate_pd
 from dynamic_dllm_cache.cache import  DynamicDLLMCacheConfig, DynamicDLLMCache
 from dynamic_dllm_cache.hooks import  register_cache_LLaDA
+from metrics.speed import SpeedMeter
 from dataclasses import asdict
 T = TypeVar("T", bound="LM")
 from lm_eval.api.model import LM
@@ -107,9 +109,14 @@ class LLaDA(TemplateLM):
         remasking: str = "low_confidence",
         mask_id: int = 126336,
         is_check_greedy : bool =True,
+        speed_log: Optional[str] = None,
+        run_name: Optional[str] = None,
         **kwargs,
     ) -> None:
         super().__init__()
+        # Where to write the throughput / tokens-per-step JSON summary.
+        self.speed_log = speed_log or os.environ.get("DLLM_SPEED_LOG")
+        self.run_name = run_name or os.environ.get("DLLM_RUN_NAME", "run")
         self.mc_num = mc_num
         self.mask_id = mask_id
         self.remasking = remasking
@@ -791,6 +798,20 @@ class LLaDA(TemplateLM):
         ds = [{"text": req.args[0]} for req in requests]
         ds = Dataset.from_list(ds)
         gen_kwargs = requests[0].args[1]
+
+        # The hooks derive the generation length from the sequence itself, but
+        # keep the cache config in sync so it reports the right value.
+        gen_length = gen_kwargs.get("gen_length")
+        if gen_length is not None:
+            DynamicDLLMCache().gen_length = gen_length
+
+        meter = SpeedMeter(
+            name=self.run_name,
+            gen_length=gen_length or 0,
+            eos_token_id=self.tokenizer.eos_token_id,
+        )
+        on_cuda = torch.cuda.is_available() and self.device.type == "cuda"
+
         for batch in ds.iter(self.batch_size):
             contexts = batch["text"]
             if self.add_bos_token:
@@ -799,8 +820,12 @@ class LLaDA(TemplateLM):
                 contexts,
                 truncation=self.truncation,
             )
+            if on_cuda:
+                torch.cuda.synchronize()
+            gen_start = time.perf_counter()
+
             if self.generate_mode == "default":
-                out = generate(
+                out, nfe = generate(
                     input_ids=context_enc,
                     attention_mask=attn_masks,
                     model=self.model,
@@ -811,7 +836,7 @@ class LLaDA(TemplateLM):
                     remasking=gen_kwargs.get("remasking",None) if gen_kwargs.get("remasking",None) else "low_confidence"
                 )
             else:
-                out, _nfe = generate_pd(
+                out, nfe = generate_pd(
                     model=self.model,
                     prompt=context_enc,
                     steps=gen_kwargs.get("steps"),
@@ -828,6 +853,11 @@ class LLaDA(TemplateLM):
                     attention_mask=attn_masks,
                 )
                 out = out[:, context_enc.shape[1]:]
+
+            if on_cuda:
+                torch.cuda.synchronize()
+            meter.record(out, nfe=nfe, elapsed=time.perf_counter() - gen_start)
+
             cont_toks_list = self.tokenizer.batch_decode(out, skip_special_tokens=True)
             for s in cont_toks_list:
                 if not self.escape_until:
@@ -838,6 +868,13 @@ class LLaDA(TemplateLM):
                 bar.update(1)
             req.append(contexts)
         bar.close()
+
+        if self.rank == 0:
+            print(meter.render(), flush=True)
+            if self.speed_log:
+                meter.dump(self.speed_log)
+                eval_logger.info(f"Wrote decoding-speed metrics to {self.speed_log}")
+
         return res
     
     def apply_chat_template(

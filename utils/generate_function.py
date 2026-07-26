@@ -36,6 +36,13 @@ def generate(
     remasking="low_confidence",
     mask_id=126336,
 ):
+    """Fixed-schedule block-wise masked diffusion generation.
+
+    Returns:
+        (generation, nfe) where ``generation`` is the generated region only,
+        shape ``(B, gen_length)``, and ``nfe`` is the number of denoising steps
+        taken (one model forward per step when ``cfg_scale == 0``).
+    """
     with torch.no_grad():
         batch_size, prompt_length = input_ids.shape
         x = torch.full(
@@ -60,6 +67,7 @@ def generate(
             (feature_cache.select_from, feature_cache.window_size, feature_cache.layer_budget)
         )
         feature_cache.set_cur_prompt(torch.arange(prompt_length, device=model.device))
+        nfe = 0
         for num_block in range(num_blocks):
             start_idx = prompt_length + num_block * block_length
             end_idx = prompt_length + (num_block + 1) * block_length
@@ -71,6 +79,7 @@ def generate(
             )
 
             for i in range(steps_per_block):
+                nfe += 1
                 mask_index = x == mask_id
                 if cfg_scale > 0.0:
                     if hasattr(feature_cache, "cfg_interval_steps"):
@@ -154,7 +163,7 @@ def generate(
                 selected_positions = torch.where(transfer_index.any(dim=0))[0] + prompt_length
                 if selected_positions.numel() > 0:
                     feature_cache.set_cur_prompt(selected_positions)
-        return x[:, prompt_length:]
+        return x[:, prompt_length:], nfe
 
 
 # ===========================================================================

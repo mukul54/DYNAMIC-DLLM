@@ -150,7 +150,7 @@ if generate_mode == "pd":
     )
     generation_ids = out[:, input_ids.shape[1]:]
 else:
-    generation_ids = generate(
+    generation_ids, nfe = generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
         model=model,
@@ -169,4 +169,8 @@ conversation_history.append({"role": "assistant", "content": answer, "time": rep
 
 # Print conversation
 print(f"LLaDA ({reply_time}): {answer}")
-print(f"Generation Time: {end_time - start_time:.2f} seconds")
+elapsed = end_time - start_time
+print(f"Generation Time: {elapsed:.2f} seconds")
+print(f"NFE (denoising steps): {nfe}")
+print(f"Tokens/step: {gen_length / nfe:.2f}")
+print(f"Throughput: {gen_length / elapsed:.1f} tok/s")
