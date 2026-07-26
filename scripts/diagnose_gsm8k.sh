@@ -40,18 +40,30 @@ APD_REPO="generate_mode=pd,pd_mode=2,pd_threshold=0.9,pd_alpha=0.01,pd_beta=0.15
 # name | gen_length | block_length | model_args | what it isolates
 RUNGS=(
   # d1 is the headline check: paper alpha/beta at the benchmark's settings.
-  "d1_paper_dcu_apd_b64_g512|512|64|${CACHE_SLOW},${APD_PAPER}|paper alpha/beta, cache + APD (the config to report)"
-  "d2_paper_apd_nocache_b64_g512|512|64|${NO_CACHE},${APD_PAPER}|paper alpha/beta, APD only"
-  "d3_stale_ab_dcu_apd_b64_g512|512|64|${CACHE_SLOW},${APD_REPO}|repo's stale alpha/beta (negative control)"
-  "d4_paper_dcu_apd_b32_g512|512|32|${CACHE_SLOW},${APD_PAPER}|block_length 32 instead of 64"
-  "d5_paper_dcu_apd_b8_g512|512|8|${CACHE_SLOW},${APD_PAPER}|block_length 8 (repo's setting)"
-  "d6_paper_dcu_apd_demoint_b64_g512|512|64|${CACHE_DEMO},${APD_PAPER}|demo.py cache refresh intervals"
-  "d7_nocache_greedy_b8_g256|256|8|${NO_CACHE},generate_mode=default|no-cache greedy at gen 256 (ceiling)"
-  "d8_nocache_greedy_b64_g512|512|64|${NO_CACHE},generate_mode=default|no-cache greedy at the benchmark's length"
-  "d9_dcu_greedy_b64_g512|512|64|${CACHE_SLOW},generate_mode=default|greedy + cache (isolates DCU alone)"
+  # Table 4 fixes block length at 32 for every benchmark, so d1 is the paper's
+  # configuration end to end and is the one to report.
+  "d1_paper_dcu_apd_b32_g512|512|32|${CACHE_SLOW},${APD_PAPER}|paper config: alpha/beta 1e-3, block 32, budget 64"
+  "d2_paper_apd_nocache_b32_g512|512|32|${NO_CACHE},${APD_PAPER}|same without the cache (isolates APD)"
+  "d3_stale_ab_dcu_apd_b32_g512|512|32|${CACHE_SLOW},${APD_REPO}|repo's stale alpha/beta (negative control)"
+  "d4_paper_dcu_apd_b64_g512|512|64|${CACHE_SLOW},${APD_PAPER}|block 64, to match a block-64 comparison"
+  "d5_paper_fixed_thresh_b32_g512|512|32|${CACHE_SLOW},generate_mode=pd,pd_mode=0,pd_threshold=0.9|fixed threshold 0.9 (APD should match this accuracy with fewer steps)"
+  "d6_paper_dcu_apd_b32_g256|256|32|${CACHE_SLOW},${APD_PAPER}|the paper's exact GSM8K row (gen 256)"
+  "d7_nocache_greedy_b32_g256|256|32|${NO_CACHE},generate_mode=default|no-cache greedy, paper's gen 256 (ceiling)"
+  "d8_nocache_greedy_b32_g512|512|32|${NO_CACHE},generate_mode=default|no-cache greedy at gen 512"
+  "d9_dcu_greedy_b32_g512|512|32|${CACHE_SLOW},generate_mode=default|greedy + cache (isolates DCU alone)"
 )
 
+# Guard against running a stale checkout: the whole point of this ladder is the
+# corrected alpha/beta, and a run with the old values looks superficially fine
+# in the logs. Fail loudly rather than burn GPU hours on the wrong config.
+if ! grep -q "pd_alpha: float = 0.001" "${REPO_DIR}/eval_model/LLaDA.py"; then
+  echo "ERROR: eval_model/LLaDA.py still has the old pd_alpha default." >&2
+  echo "       Run: git pull origin \$(git rev-parse --abbrev-ref HEAD)" >&2
+  exit 1
+fi
+
 echo "model=${MODEL_PATH}  limit=${LIMIT}  batch=${BATCH_SIZE}  ${NUM_FEWSHOT}-shot"
+echo "APD: ${APD_PAPER}"
 echo "Rungs d1-d6 are cheap (parallel decoding); d7-d9 are slow (one token/step)."
 echo ""
 

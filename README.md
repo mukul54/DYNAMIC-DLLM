@@ -53,7 +53,17 @@ generation length 256. For other lengths the paper gives an auto-tuning rule,
 
 Adaptive Parallel Decoding uses `pd_mode=2` (Eq. 11 adapts a threshold per
 token), initial threshold `pd_threshold=0.9` (Fig. 6c), and
-`pd_alpha=0.001` / `pd_beta=0.0008` (Table 7).
+`pd_alpha=0.001` / `pd_beta=0.0008` (Table 7, and stated again in Appendix B.2).
+
+Block length is 32 for every benchmark (Table 4), at both generation length
+256 and 512:
+
+| Dataset | Steps | Block length | Generation length |
+| --- | --- | --- | --- |
+| MMLU, ARC-C, GSM8K, Math | 256 | 32 | 256 |
+| HumanEval | 512 | 32 | 512 |
+
+GSM8K is evaluated 4-shot.
 
 **`pd_alpha` and `pd_beta` must stay in the 1e-3 range.** They control how fast
 the per-token threshold relaxes, and the paper's Table 7 measures the cost of

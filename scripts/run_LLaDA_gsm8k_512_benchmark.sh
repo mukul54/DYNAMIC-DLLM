@@ -32,7 +32,11 @@ MODEL_PATH="$(printf '%s' "${MODEL_PATH}" \
   | LC_ALL=C tr -d '[:space:][:cntrl:]' \
   | sed $'s/\xc2\xa0//g')"
 GEN_LENGTH="${GEN_LENGTH:-512}"
-BLOCK_LENGTH="${BLOCK_LENGTH:-64}"   # beta = 64 in the Flash-dLLM paper
+# The paper's Table 4 uses block length 32 for every benchmark, at both
+# generation length 256 (GSM8K) and 512 (HumanEval), so 32 is Dynamic-dLLM's
+# tuned setting. Set BLOCK_LENGTH=64 to instead match a comparison whose own
+# block size is 64.
+BLOCK_LENGTH="${BLOCK_LENGTH:-32}"
 BATCH_SIZE="${BATCH_SIZE:-16}"       # Table 5: batch 16 for LLaDA-1.5 GSM8K
 NUM_FEWSHOT="${NUM_FEWSHOT:-5}"      # GSM8K is reported 5-shot
 OUT_ROOT="${OUT_ROOT:-./gsm8k512_log}"
