@@ -26,6 +26,8 @@ cd "${REPO_DIR}"
 # Knobs (override from the environment)
 # ---------------------------------------------------------------------------
 MODEL_PATH="${MODEL_PATH:-/data1/wutianyi/models/LLaDA-1.5}"
+# A stray space in a HF repo id turns into a confusing "repo not found".
+MODEL_PATH="$(echo -n "${MODEL_PATH}" | tr -d '[:space:]')"
 GEN_LENGTH="${GEN_LENGTH:-512}"
 BLOCK_LENGTH="${BLOCK_LENGTH:-64}"   # beta = 64 in the Flash-dLLM paper
 BATCH_SIZE="${BATCH_SIZE:-16}"       # Table 5: batch 16 for LLaDA-1.5 GSM8K
@@ -46,11 +48,28 @@ PD_THRESHOLD="${PD_THRESHOLD:-0.9}"
 PD_ALPHA="${PD_ALPHA:-0.01}"
 PD_BETA="${PD_BETA:-0.15}"
 
-# Local HF dataset cache. Skip with USE_LOCAL_DATA_ENV=0 to hit the hub.
-if [[ "${USE_LOCAL_DATA_ENV:-1}" == "1" && -f "${REPO_DIR}/data/env.sh" ]]; then
+# Use the pre-populated local HF cache only if it actually exists, otherwise
+# fall back to the default cache and let HF download. Forcing offline mode
+# against a missing cache fails with an unhelpful "couldn't find" error.
+# Override explicitly with USE_LOCAL_DATA_ENV=1 / 0.
+LLADA_DATA_ROOT="${LLADA_DATA_ROOT:-/data1/wutianyi/data/llada}"
+if [[ -z "${USE_LOCAL_DATA_ENV:-}" ]]; then
+  if [[ -d "${LLADA_DATA_ROOT}/hf_datasets" ]]; then
+    USE_LOCAL_DATA_ENV=1
+  else
+    USE_LOCAL_DATA_ENV=0
+  fi
+fi
+
+if [[ "${USE_LOCAL_DATA_ENV}" == "1" && -f "${REPO_DIR}/data/env.sh" ]]; then
+  echo "[benchmark] using local HF cache at ${LLADA_DATA_ROOT} (offline mode)"
   source "${REPO_DIR}/data/env.sh"
   export HF_DATASETS_OFFLINE=1
   export HF_HUB_OFFLINE=1
+else
+  echo "[benchmark] no local HF cache at ${LLADA_DATA_ROOT}; using the default HF cache (online)"
+  export HF_DATASETS_TRUST_REMOTE_CODE=1
+  export HF_ALLOW_CODE_EVAL=1
 fi
 
 GEN_KWARGS="block_length=${BLOCK_LENGTH},gen_length=${GEN_LENGTH},steps=${GEN_LENGTH},cfg_scale=0.0"

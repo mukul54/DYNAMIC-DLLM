@@ -3,7 +3,7 @@ import os
 import time
 from datetime import timedelta
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, Union,Type,TypeVar
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import jinja2
 import torch
@@ -12,14 +12,10 @@ import transformers
 from accelerate import (
     Accelerator,
     InitProcessGroupKwargs,
-    find_executable_batch_size,
 )
 from datasets import Dataset
 from accelerate.utils import get_max_memory
-from huggingface_hub import HfApi
 from packaging import version
-from peft import PeftModel
-from peft import __version__ as PEFT_VERSION
 from tqdm import tqdm
 from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES,
@@ -27,19 +23,27 @@ from transformers.models.auto.modeling_auto import (
 
 )
 
-from lm_eval import utils
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import TemplateLM
 from lm_eval.api.registry import register_model
-from lm_eval.models.utils import (
-    Collator,
-    clear_torch_cache,
-    configure_pad_token,
-    get_dtype,
-    handle_stop_sequences,
-    pad_and_concat,
-    stop_sequences_criteria,
-)
+
+# Import only what is actually used, and tolerate the module layout moving:
+# lm-eval >= 0.4.12 relocated the HF helpers to `lm_eval.models.utils_hf`, and
+# forks differ in what `lm_eval.models.utils` re-exports. Importing names this
+# file never uses made it fail to load on otherwise-compatible harnesses.
+from lm_eval.models.utils import configure_pad_token
+
+try:
+    from lm_eval.models.utils_hf import get_dtype
+except ImportError:
+    try:
+        from lm_eval.models.utils import get_dtype
+    except ImportError:
+        def get_dtype(dtype):
+            """Convert a dtype string to a torch.dtype, passing through 'auto'."""
+            if isinstance(dtype, str) and dtype != "auto":
+                return getattr(torch, dtype)
+            return dtype
 
 eval_logger = logging.getLogger(__name__)
 from utils import  generate, generate_pd
@@ -47,8 +51,6 @@ from dynamic_dllm_cache.cache import  DynamicDLLMCacheConfig, DynamicDLLMCache
 from dynamic_dllm_cache.hooks import  register_cache_LLaDA
 from metrics.speed import SpeedMeter
 from dataclasses import asdict
-T = TypeVar("T", bound="LM")
-from lm_eval.api.model import LM
 
 @register_model("LLaDA")
 class LLaDA(TemplateLM):
