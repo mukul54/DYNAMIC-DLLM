@@ -34,6 +34,11 @@ NO_CACHE="is_feature_cache=False"
 
 # name | gen_length | block_length | model_args | what it isolates
 RUNGS=(
+  # The only PD configuration the repo actually ships end-to-end: demo.py's
+  # settings verbatim (pd_mode=0, threshold 0.9, cache refresh every 7 steps,
+  # block 8, gen 256). If this does not score well, the problem is upstream of
+  # any knob I picked.
+  "d0_demo_exact_b8_g256|256|8|${CACHE_DEMO},generate_mode=pd,pd_mode=0,pd_threshold=0.9|demo.py config verbatim (reference)"
   "d1_apd2_nocache_b64_g512|512|64|${NO_CACHE},generate_mode=pd,pd_mode=2,pd_threshold=0.9|adaptive per-token threshold, no cache"
   "d2_apd0_nocache_b64_g512|512|64|${NO_CACHE},generate_mode=pd,pd_mode=0,pd_threshold=0.9|fixed threshold 0.9, no cache"
   "d3_apd1_nocache_b64_g512|512|64|${NO_CACHE},generate_mode=pd,pd_mode=1,pd_threshold=0.9|adaptive global threshold, no cache"
